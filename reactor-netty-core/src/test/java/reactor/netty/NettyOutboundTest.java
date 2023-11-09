@@ -15,24 +15,6 @@
  */
 package reactor.netty;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.net.URISyntaxException;
-import java.nio.channels.Channels;
-import java.nio.channels.WritableByteChannel;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.security.cert.CertificateException;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.function.BiFunction;
-import java.util.function.Consumer;
-import java.util.function.Predicate;
-import javax.net.ssl.SSLException;
-
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
@@ -45,25 +27,85 @@ import io.netty.handler.codec.UnsupportedMessageTypeException;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslHandler;
-import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.handler.stream.ChunkedNioFile;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.util.CharsetUtil;
 import io.netty.util.ReferenceCountUtil;
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
+import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.X509v1CertificateBuilder;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.DefaultDigestAlgorithmIdentifierFinder;
+import org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder;
+import org.bouncycastle.operator.OperatorCreationException;
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 
+import javax.net.ssl.SSLException;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.math.BigInteger;
+import java.net.URISyntaxException;
+import java.nio.channels.Channels;
+import java.nio.channels.WritableByteChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.Security;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class NettyOutboundTest {
 
-	static SelfSignedCertificate ssc;
+	private static X509Certificate certificate;
+	static PrivateKey privateKey;
+	static BouncyCastleProvider provider = new BouncyCastleProvider();
 
 	@BeforeAll
-	static void createSelfSignedCertificate() throws CertificateException {
-		ssc = new SelfSignedCertificate();
+	static void createSelfSignedCertificate() throws NoSuchAlgorithmException, OperatorCreationException, CertificateException {
+		Security.addProvider(provider);
+		AlgorithmIdentifier sigAlgId = new DefaultSignatureAlgorithmIdentifierFinder().find("SHA1withRSA");
+		KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
+		keyGen.initialize(1024);
+		KeyPair key = keyGen.generateKeyPair();
+		privateKey = key.getPrivate();
+		ContentSigner sigGen = new JcaContentSignerBuilder("SHA1withRSA").setProvider("BC").build(privateKey);
+		SubjectPublicKeyInfo subjectPublicKeyInfo = SubjectPublicKeyInfo.getInstance(key.getPublic().getEncoded());
+		Date startDate =Date.from(Instant.now().minus(Duration.ofDays(1)));
+		Date endDate = Date.from(Instant.now().plus(Duration.ofDays(1)));
+
+
+		X509v1CertificateBuilder builder = new X509v1CertificateBuilder(
+				new X500Name("CN=Test"),
+				BigInteger.ONE,
+				startDate, endDate,
+				new X500Name("CN=Test"),
+				subjectPublicKeyInfo);
+		X509CertificateHolder certificateHolder = builder.build(sigGen);
+		certificate = new JcaX509CertificateConverter().getCertificate(certificateHolder);
 	}
 
 	@Test
@@ -75,7 +117,7 @@ class NettyOutboundTest {
 
 					@Override
 					protected void encode(ChannelHandlerContext ctx, FileRegion msg,
-							List<Object> out) throws Exception {
+					                      List<Object> out) throws Exception {
 						ByteArrayOutputStream bais = new ByteArrayOutputStream();
 						WritableByteChannel wbc = Channels.newChannel(bais);
 
@@ -86,7 +128,7 @@ class NettyOutboundTest {
 				new MessageToMessageEncoder<Object>() {
 					@Override
 					protected void encode(ChannelHandlerContext ctx, Object msg,
-							List<Object> out) {
+					                      List<Object> out) {
 						messageClasses.add(msg.getClass());
 						ReferenceCountUtil.retain(msg);
 						out.add(msg);
@@ -117,8 +159,8 @@ class NettyOutboundTest {
 
 			@Override
 			public <S> NettyOutbound sendUsing(Callable<? extends S> sourceInput,
-					BiFunction<? super Connection, ? super S, ?> mappedInput,
-					Consumer<? super S> sourceCleanup) {
+			                                   BiFunction<? super Connection, ? super S, ?> mappedInput,
+			                                   Consumer<? super S> sourceCleanup) {
 				return then(mockSendUsing(mockContext, sourceInput, mappedInput, sourceCleanup));
 			}
 
@@ -131,7 +173,7 @@ class NettyOutboundTest {
 		ChannelFuture f = channel.writeOneOutbound(1);
 
 		outbound.sendFile(Paths.get(getClass().getResource("/largeFile.txt").toURI()))
-		        .then().block();
+				.then().block();
 
 		assertThat(channel.inboundMessages()).isEmpty();
 		assertThat(channel.outboundMessages()).hasSize(2);
@@ -149,7 +191,7 @@ class NettyOutboundTest {
 
 	@Test
 	void sendFileWithTlsUsesChunkedFile() throws URISyntaxException, SSLException {
-		SslContext sslCtx = SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey()).build();
+		SslContext sslCtx = SslContextBuilder.forServer(privateKey, certificate).build();
 		final SslHandler sslHandler = sslCtx.newHandler(ByteBufAllocator.DEFAULT);
 
 		List<Class<?>> messageWritten = new ArrayList<>(2);
@@ -163,7 +205,7 @@ class NettyOutboundTest {
 				new MessageToMessageEncoder<ByteBuf>() {
 					@Override
 					protected void encode(ChannelHandlerContext ctx, ByteBuf msg,
-							List<Object> out) {
+					                      List<Object> out) {
 						clearMessages.add(msg.readCharSequence(msg.readableBytes(), CharsetUtil.UTF_8));
 						out.add(msg.retain()); //the encoder will release the buffer, make sure it is retained for SslHandler
 					}
@@ -205,8 +247,8 @@ class NettyOutboundTest {
 
 			@Override
 			public <S> NettyOutbound sendUsing(Callable<? extends S> sourceInput,
-					BiFunction<? super Connection, ? super S, ?> mappedInput,
-					Consumer<? super S> sourceCleanup) {
+			                                   BiFunction<? super Connection, ? super S, ?> mappedInput,
+			                                   Consumer<? super S> sourceCleanup) {
 				return then(mockSendUsing(mockContext, sourceInput, mappedInput, sourceCleanup));
 			}
 
@@ -220,8 +262,8 @@ class NettyOutboundTest {
 
 		try {
 			outbound.sendFile(Paths.get(getClass().getResource("/largeFile.txt").toURI()))
-			        .then()
-			        .block(Duration.ofSeconds(1)); //TODO investigate why this hangs
+					.then()
+					.block(Duration.ofSeconds(1)); //TODO investigate why this hangs
 		}
 		catch (IllegalStateException e) {
 			if (!"Timeout on blocking read for 1000 MILLISECONDS".equals(e.getMessage())) {
@@ -260,7 +302,7 @@ class NettyOutboundTest {
 				new MessageToMessageEncoder<ByteBuf>() {
 					@Override
 					protected void encode(ChannelHandlerContext ctx, ByteBuf msg,
-							List<Object> out) {
+					                      List<Object> out) {
 						out.add(msg.readCharSequence(msg.readableBytes(), CharsetUtil.UTF_8));
 					}
 				},
@@ -298,8 +340,8 @@ class NettyOutboundTest {
 
 			@Override
 			public <S> NettyOutbound sendUsing(Callable<? extends S> sourceInput,
-					BiFunction<? super Connection, ? super S, ?> mappedInput,
-					Consumer<? super S> sourceCleanup) {
+			                                   BiFunction<? super Connection, ? super S, ?> mappedInput,
+			                                   Consumer<? super S> sourceCleanup) {
 				return then(mockSendUsing(mockContext, sourceInput, mappedInput, sourceCleanup));
 			}
 
@@ -313,7 +355,7 @@ class NettyOutboundTest {
 
 		ChannelFuture f = channel.writeOneOutbound(1);
 		outbound.sendFileChunked(path, 0, Files.size(path))
-		        .then().block();
+				.then().block();
 
 		assertThat(channel.inboundMessages()).isEmpty();
 		assertThat(messageWritten).containsExactly(Integer.class, ChunkedNioFile.class);
@@ -336,12 +378,12 @@ class NettyOutboundTest {
 	}
 
 	static <S> Mono<Void> mockSendUsing(Connection c, Callable<? extends S> sourceInput,
-			BiFunction<? super Connection, ? super S, ?> mappedInput,
-			Consumer<? super S> sourceCleanup) {
+	                                    BiFunction<? super Connection, ? super S, ?> mappedInput,
+	                                    Consumer<? super S> sourceCleanup) {
 		return Mono.using(
 				sourceInput,
 				s -> FutureMono.from(c.channel()
-				                      .writeAndFlush(mappedInput.apply(c, s))),
+						.writeAndFlush(mappedInput.apply(c, s))),
 				sourceCleanup
 		);
 	}

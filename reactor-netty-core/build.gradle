@@ -136,6 +136,7 @@ dependencies {
 	testImplementation "org.mockito:mockito-core:$mockitoVersion"
 	testImplementation "ch.qos.logback:logback-classic:$logbackVersion"
 	testImplementation "io.projectreactor.tools:blockhound-junit-platform:$blockHoundVersion"
+	testImplementation "org.bouncycastle:bcpkix-jdk18on:$bouncyCastleVersion"
 	testImplementation "io.micrometer:micrometer-core:$micrometerVersion"
 	testImplementation "io.micrometer:micrometer-test:$micrometerVersion"
 	testImplementation "org.reflections:reflections:$reflectionsVersion"

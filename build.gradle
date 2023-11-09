@@ -133,6 +133,7 @@ ext {
 	mockitoVersion = '4.11.0'
 	blockHoundVersion = '1.0.8.RELEASE'
 	reflectionsVersion = '0.10.2'
+	bouncyCastleVersion = '1.76'
 
 	javadocLinks = ["https://docs.oracle.com/javase/8/docs/api/",
 					// Use Reactive Streams 1.0.3 version for javadoc generation
@@ -195,7 +196,7 @@ subprojects {
 
 	java {
 		toolchain {
-			languageVersion = JavaLanguageVersion.of(8)
+			languageVersion = JavaLanguageVersion.of(17)
 		}
 	}
 
@@ -276,6 +277,9 @@ subprojects {
 		exclude '**/*Abstract*.*'
 
 		useJUnitPlatform()
+		jvmArgs += [
+				"-XX:+AllowRedefinitionToAddDeleteMethods" //see https://github.com/reactor/BlockHound#jdk13-support
+		]
 
 		retry {
 			maxFailures = 10
